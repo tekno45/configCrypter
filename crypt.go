@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -14,11 +15,26 @@ import (
 	"github.com/aws/aws-sdk-go/service/kms"
 )
 
-//encryptFile takes in a file path and returns the KMS encrypted data
-func encryptFile(targetFile *string, kmsID *string, client kms.KMS) []byte {
+func decryptFile(targetFile *string, client kms.KMS) {
 	text, err := ioutil.ReadFile(*targetFile)
 	if err != nil {
-		log.Fatal("Cannot read file: ", *targetFile)
+		log.Fatal("can't read secret file")
+	}
+	payload := &kms.DecryptInput{
+		CiphertextBlob: text,
+	}
+
+	response, err := client.Decrypt(payload)
+	fmt.Println("Decrypting")
+	fmt.Println(string(response.Plaintext))
+
+}
+
+//encryptFile takes in a file path and returns the KMS encrypted data
+func encryptFile(targetFile *string, kmsID *string, client kms.KMS, pipe chan<- []byte) {
+	text, err := ioutil.ReadFile(*targetFile)
+	if err != nil {
+		log.Fatal("Cannot read file: ", *targetFile, "\n", err)
 	}
 
 	var input kms.EncryptInput
@@ -31,19 +47,28 @@ func encryptFile(targetFile *string, kmsID *string, client kms.KMS) []byte {
 	if err != nil {
 		fmt.Println(err)
 	}
+	fmt.Println(string(text))
+	fmt.Println(output.String())
 	fmt.Println(string(output.CiphertextBlob))
-	return output.CiphertextBlob
+	pipe <- output.CiphertextBlob
 }
 
 //writeEncryptedFile writes the encrypted data to disk and creates the folder to hold them
-func writeEncryptedFile(outputFolder *string, osPerms *int, file []byte, path *string) {
+func writeEncryptedFile(outputFolder *string, osPerms *int, path *string, pipe chan []byte) string {
+	file := <-pipe
 	perms := os.FileMode(*osPerms)
 	filename := *outputFolder + filepath.Base(*path)
 
-	err := ioutil.WriteFile(filename, file, perms)
-	if err != nil {
-		fmt.Println(os.Mkdir(filepath.Base(*outputFolder), perms))
+	if err := ioutil.WriteFile(filename, file, perms); err != nil {
+		if err := os.Mkdir(filepath.Base(*outputFolder), perms); err != nil {
+			log.Fatal(err)
+		}
+		err := ioutil.WriteFile(filename, file, perms)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
+	return filename
 }
 
 func main() {
@@ -51,7 +76,11 @@ func main() {
 	kmsID := flag.String("kms", "", "KMS Key to use to encrypt the file")
 	region := flag.String("region", "us-west-1", "region with KMS key")
 	flag.Parse()
-	files := flag.Args()
+	config_file, err := ioutil.ReadFile("file_list.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+	files := strings.Split(string(config_file), "\n")
 	if len(files) < 1 {
 		log.Fatal("usage: ./cfgcrpyt -o=./encryptedOutPut/ /path1/file1 /path2/file2")
 	}
@@ -59,10 +88,14 @@ func main() {
 
 	client := *kms.New(sess, aws.NewConfig().WithRegion(*region))
 	osPerms := int(0667)
+	pipe := make(chan []byte)
+
 	for x := range files {
 		fmt.Println("Encrypting: ", files[x])
-		file := encryptFile(&files[x], kmsID, client)
-		writeEncryptedFile(outputFolder, &osPerms, file, &files[x])
+		file := strings.TrimSpace(files[x])
+		if file != "" {
+			go encryptFile(&file, kmsID, client, pipe)
+			fmt.Println(writeEncryptedFile(outputFolder, &osPerms, &files[x], pipe))
+		}
 	}
-
 }
