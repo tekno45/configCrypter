@@ -9,8 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/aws/aws-sdk-go/service/s3/s3iface"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -19,7 +18,7 @@ import (
 )
 
 //decryptFile takes KMS encrypted file requests AWS KMS to decrypt it
-func decryptFile(targetFile *string, kmsClient kmsiface.KMSAPI) {
+func decryptFile(targetFile *string, kmsClient kmsiface.KMSAPI) (output string) {
 	text, err := ioutil.ReadFile(*targetFile)
 	if err != nil {
 		log.Fatal("can't read secret file")
@@ -29,14 +28,15 @@ func decryptFile(targetFile *string, kmsClient kmsiface.KMSAPI) {
 	}
 
 	response, err := kmsClient.Decrypt(payload)
-	fmt.Println("Decrypting")
-	fmt.Println(string(response.Plaintext))
+	output = string(response.Plaintext)
+	return
 
 }
 
 //encryptFile takes in a file path and puts the KMS encrypted data to a channel
 func encryptFile(buf bytes.Buffer, kmsID *string, kmsClient kmsiface.KMSAPI, pipeInput chan<- []byte) {
 	text := buf.Bytes()
+	buf.Reset()
 	var input kms.EncryptInput
 	input.KeyId = kmsID
 	input.Plaintext = text
@@ -52,10 +52,11 @@ func encryptFile(buf bytes.Buffer, kmsID *string, kmsClient kmsiface.KMSAPI, pip
 }
 
 //writeEncryptedFile writes the encrypted data to disk and creates the folder to hold them
-func writeEncryptedFile(outputFolder *string, osPerms *int, path *string, pipeInput chan []byte) string {
+func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, path *string, pipeInput chan []byte) (filename string) {
+	defer wg.Done()
 	file := <-pipeInput
 	perms := os.FileMode(*osPerms)
-	filename := *outputFolder + filepath.Base(*path)
+	filename = *outputFolder + filepath.Base(*path)
 
 	if err := ioutil.WriteFile(filename, file, perms); err != nil {
 		if err := os.Mkdir(filepath.Base(*outputFolder), perms); err != nil {
@@ -66,7 +67,7 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, path *string, pipeIn
 			log.Fatal(err)
 		}
 	}
-	return filename
+	return
 }
 
 func main() {
@@ -87,36 +88,39 @@ func main() {
 	kmsClient := kms.New(sess, aws.NewConfig().WithRegion(*region))
 	//s3Client := s3.New(sess, aws.NewConfig().WithRegion(*region))
 	osPerms := int(0667)
-	pipeInput := make(chan []byte)
+	pipeInput := make(chan []byte, 100)
 	//pipeOutput := make(chan []byte)
-
+	var wg sync.WaitGroup
+	var buf bytes.Buffer
 	for x := range files {
 		file := strings.TrimSpace(files[x])
 		if file != "" {
 			fmt.Println("Encrypting: ", files[x])
 			text, err := ioutil.ReadFile(file)
 			if err != nil {
-				log.Fatal(err)
+				fmt.Println("can't open", file)
+				continue
 			}
 
-			var buf bytes.Buffer
 			buf.Write(text)
-			//uri, err := url.Parse(file)
-			if err != nil {
-				go encryptFile(buf, kmsID, kmsClient, pipeInput)
-				writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)
-			}
+
+			//uri, err := url.Parse(file) // check file name for URI scheme, assume no scheme = file path
+			//if err != nil {
+			//	go encryptFile(buf, kmsID, kmsClient, pipeInput)
+			//	writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)	}
+			wg.Add(1)
 			go encryptFile(buf, kmsID, kmsClient, pipeInput)
-			writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)
+			go writeEncryptedFile(outputFolder, &osPerms, &wg, &files[x], pipeInput)
+
 			// Block for checking URL scheme for s3 upload
 			//	switch uri.Scheme {
 			//	case "s3":
 			//		return
 			//	default:
-			//		return
-			//	}
+			//		return	}
 
 		}
 
 	}
+	wg.Wait()
 }

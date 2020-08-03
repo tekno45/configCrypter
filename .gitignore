@@ -1,0 +1,4 @@
+[defaults]
+test_files/*
+encrypted/*
+file_list.txt
