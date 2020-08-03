@@ -73,11 +73,11 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, 
 func findConfig(configFile string, startingDir string) ([]byte, string, error) {
 
 	file, err := ioutil.ReadFile(filepath.Join(startingDir, configFile))
-
-	count := 0
 	if err != nil {
-		fmt.Println(err)
-		count++
+		if startingDir == "/" {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 		return findConfig(configFile, filepath.Dir(startingDir))
 	}
 	return file, startingDir, nil
