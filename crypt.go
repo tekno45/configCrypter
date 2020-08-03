@@ -56,8 +56,8 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, 
 	defer wg.Done()
 	file := <-pipeInput
 	perms := os.FileMode(*osPerms)
-	filename = *outputFolder + filepath.Base(*path)
-
+	fmt.Println(filepath.Base(*path))
+	filename = filepath.Join(*outputFolder, filepath.Base(*path))
 	if err := ioutil.WriteFile(filename, file, perms); err != nil {
 		if err := os.Mkdir(filepath.Base(*outputFolder), perms); err != nil {
 			log.Fatal(err)
@@ -70,12 +70,32 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, 
 	return
 }
 
+func findConfig(configFile string, startingDir string) ([]byte, string, error) {
+
+	file, err := ioutil.ReadFile(filepath.Join(startingDir, configFile))
+
+	count := 0
+	if err != nil {
+		fmt.Println(err)
+		count++
+		return findConfig(configFile, filepath.Dir(startingDir))
+	}
+	return file, startingDir, nil
+}
 func main() {
-	outputFolder := flag.String("output", "./encrypted/", "folder to output encrytped files to")
+
 	kmsID := flag.String("kms", "", "KMS Key to use to encrypt the file")
 	region := flag.String("region", "us-west-1", "region with KMS key")
+	cwd, _ := os.Getwd()
+	fileList := flag.String("f", "file_list.txt", "list of files to encrypt")
+	fmt.Println("flag:", *fileList)
+
+	configFile, path, err := findConfig(*fileList, cwd)
+	os.Chdir(path)
+	fmt.Println("chdir to: ", path)
+	outputFolder := flag.String("output", "encrypted/", "folder to output encrytped files to")
+	fmt.Println(*outputFolder)
 	flag.Parse()
-	configFile, err := ioutil.ReadFile("file_list.txt")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -95,7 +115,6 @@ func main() {
 	for x := range files {
 		file := strings.TrimSpace(files[x])
 		if file != "" {
-			fmt.Println("Encrypting: ", files[x])
 			text, err := ioutil.ReadFile(file)
 			if err != nil {
 				fmt.Println("can't open", file)
@@ -110,7 +129,7 @@ func main() {
 			//	writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)	}
 			wg.Add(1)
 			go encryptFile(buf, kmsID, kmsClient, pipeInput)
-			go writeEncryptedFile(outputFolder, &osPerms, &wg, &files[x], pipeInput)
+			go writeEncryptedFile(outputFolder, &osPerms, &wg, &file, pipeInput)
 
 			// Block for checking URL scheme for s3 upload
 			//	switch uri.Scheme {
