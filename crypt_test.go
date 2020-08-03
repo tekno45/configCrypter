@@ -61,6 +61,7 @@ func TestEncrypyFile(t *testing.T) {
 		}
 	default:
 	}
+	testBytes.Reset()
 
 	return
 }
