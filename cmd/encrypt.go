@@ -16,9 +16,9 @@ limitations under the License.
 package cmd
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -36,9 +36,8 @@ import (
 var kmsKey string
 
 //encryptFile takes in a file path and puts the KMS encrypted data to a channel
-func encryptFile(buf bytes.Buffer, kmsID *string, kmsClient kmsiface.KMSAPI, pipeInput chan<- []byte) {
-	text := buf.Bytes()
-	buf.Reset()
+func encryptFile(data io.Reader, kmsID *string, kmsClient kmsiface.KMSAPI, pipeInput chan<- []byte) {
+	text, err := ioutil.ReadAll(data)
 	var input kms.EncryptInput
 	input.KeyId = kmsID
 	input.Plaintext = text
@@ -53,6 +52,23 @@ func encryptFile(buf bytes.Buffer, kmsID *string, kmsClient kmsiface.KMSAPI, pip
 
 }
 
+func readFileList(fileList []byte) (list []os.File, files []string) {
+	files = strings.Split(string(fileList), "\n")
+	for x := range files {
+		file := strings.TrimSpace(files[x])
+		if file != "" {
+			text, err := os.Open(file)
+			if err != nil {
+				fmt.Println("can't open", file)
+				continue
+			}
+			list = append(list, *text)
+
+		}
+	}
+	return list, files
+}
+
 //writeEncryptedFile writes the encrypted data to disk and creates the folder to hold them
 func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, path *string, pipeInput chan []byte) (filename string) {
 	defer wg.Done()
@@ -60,15 +76,12 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, 
 	perms := os.FileMode(*osPerms)
 	//fmt.Println(filepath.Base(*path))
 	filename = filepath.Join(*outputFolder, filepath.Base(*path))
-	if err := ioutil.WriteFile(filename, file, perms); err != nil {
-		if err := os.Mkdir(filepath.Base(*outputFolder), perms); err != nil {
-
-			log.Fatal(err)
-		}
-		err := ioutil.WriteFile(filename, file, perms)
-		if err != nil {
-			log.Fatal(err)
-		}
+	if _, err := os.Stat(filepath.Base(*outputFolder)); os.IsNotExist(err) {
+		os.Mkdir(filepath.Base(*outputFolder), perms)
+	}
+	err := ioutil.WriteFile(filename, file, perms)
+	if err != nil {
+		log.Fatal(err)
 	}
 	return
 }
@@ -99,10 +112,10 @@ to quickly create a Cobra application.`,
 		kmsID := &kmsKey
 		region := flag.String("region", "us-west-1", "region with KMS key")
 		cwd, _ := os.Getwd()
-		fileList := flag.String("f", "file_list.txt", "list of files to encrypt")
+		targetListPath := flag.String("f", "file_list.txt", "list of files to encrypt")
 		fmt.Println("args", args)
 
-		configFile, path, err := findConfig(*fileList, cwd)
+		configFile, path, err := findConfig(fileList, cwd)
 		os.Chdir(path)
 		fmt.Println("chdir to: ", path)
 		outputFolder := flag.String("output", "encrypted/", "folder to output encrytped files to")
@@ -123,34 +136,24 @@ to quickly create a Cobra application.`,
 		pipeInput := make(chan []byte, 100)
 		//pipeOutput := make(chan []byte)
 		var wg sync.WaitGroup
-		var buf bytes.Buffer
-		for x := range files {
-			file := strings.TrimSpace(files[x])
-			if file != "" {
-				text, err := ioutil.ReadFile(file)
-				if err != nil {
-					fmt.Println("can't open", file)
-					continue
-				}
+		fileListData, _ := ioutil.ReadFile(*targetListPath)
+		fileList, fileListPaths := readFileList(fileListData)
+		for x := range fileList {
+			var reader io.Reader = (&fileList[x])
+			//uri, err := url.Parse(file) // check file name for URI scheme, assume no scheme = file path
+			//if err != nil {
+			//	go encryptFile(buf, kmsID, kmsClient, pipeInput)
+			//	writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)	}
+			wg.Add(1)
+			go encryptFile(reader, kmsID, kmsClient, pipeInput)
+			go writeEncryptedFile(outputFolder, &osPerms, &wg, &fileListPaths[x], pipeInput)
 
-				buf.Write(text)
-
-				//uri, err := url.Parse(file) // check file name for URI scheme, assume no scheme = file path
-				//if err != nil {
-				//	go encryptFile(buf, kmsID, kmsClient, pipeInput)
-				//	writeEncryptedFile(outputFolder, &osPerms, &files[x], pipeInput)	}
-				wg.Add(1)
-				go encryptFile(buf, kmsID, kmsClient, pipeInput)
-				go writeEncryptedFile(outputFolder, &osPerms, &wg, &file, pipeInput)
-
-				// Block for checking URL scheme for s3 upload
-				//	switch uri.Scheme {
-				//	case "s3":
-				//		return
-				//	default:
-				//		return	}
-
-			}
+			// Block for checking URL scheme for s3 upload
+			//	switch uri.Scheme {
+			//	case "s3":
+			//		return
+			//	default:
+			//		return	}
 
 		}
 		wg.Wait()
