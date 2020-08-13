@@ -60,22 +60,39 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("decrypt called")
+		//Everything needed to run on CLI args declared here
 		sess := session.Must(session.NewSession())
 		region, _ := cmd.Flags().GetString("region") // can't fail since default is set
 		kmsClient := kms.New(sess, aws.NewConfig().WithRegion(region))
 		cwd, _ := os.Getwd()
+
+		//Run if  there are CLI args
+		count := 0
 		for x := range args {
 			file, err := os.Open(args[x])
 			defer file.Close()
 			if err != nil {
-				log.Fatal(err)
+				fmt.Println(err)
+				continue
 			}
-			decryptData(file, kmsClient)
+			output := decryptData(file, kmsClient)
+			fmt.Println(string(output))
+			count++
 		}
+
+		// Exit out if CLI args were provided
+		if count > 0 {
+			return
+		}
+
+		//Read in lines from file
 		list, _ := cmd.Flags().GetString("fileList")
+
+		//Change to Dir config is found
 		fileList, path, _ := findConfig(list, cwd)
 		os.Chdir(path)
+
+		//OpenFiles
 		_, filePaths := readFileList(fileList)
 		for x := range filePaths {
 			filename := filepath.Join("encrypted/", filepath.Base(filePaths[x]))
@@ -85,8 +102,7 @@ to quickly create a Cobra application.`,
 				continue
 			}
 			fmt.Println(filename)
-			var reader io.Reader = (file)
-			output := decryptData(reader, kmsClient)
+			output := decryptData(file, kmsClient)
 			fmt.Println("output", string(output))
 		}
 

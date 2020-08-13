@@ -46,7 +46,7 @@ func encryptFile(data io.Reader, kmsID *string, kmsClient kmsiface.KMSAPI, pipeI
 		Plaintext: text})
 
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal(err)
 	}
 	pipeInput <- output.CiphertextBlob
 
@@ -59,7 +59,7 @@ func readFileList(fileList []byte) (list []os.File, files []string) {
 		if file != "" {
 			text, err := os.Open(file)
 			if err != nil {
-				fmt.Println("can't open", file)
+				fmt.Println(err)
 				continue
 			}
 			list = append(list, *text)
@@ -74,7 +74,6 @@ func writeEncryptedFile(outputFolder *string, osPerms *int, wg *sync.WaitGroup, 
 	defer wg.Done()
 	file := <-pipeInput
 	perms := os.FileMode(*osPerms)
-	//fmt.Println(filepath.Base(*path))
 	filename = filepath.Join(*outputFolder, filepath.Base(*path))
 	if _, err := os.Stat(filepath.Base(*outputFolder)); os.IsNotExist(err) {
 		os.Mkdir(filepath.Base(*outputFolder), perms)
@@ -91,8 +90,7 @@ func findConfig(configFile string, startingDir string) ([]byte, string, error) {
 	file, err := ioutil.ReadFile(filepath.Join(startingDir, configFile))
 	if err != nil {
 		if startingDir == "/" {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 		return findConfig(configFile, filepath.Dir(startingDir))
 	}
@@ -113,13 +111,10 @@ to quickly create a Cobra application.`,
 		region := flag.String("region", "us-west-1", "region with KMS key")
 		cwd, _ := os.Getwd()
 		targetListPath := flag.String("f", "file_list.txt", "list of files to encrypt")
-		fmt.Println("args", args)
 
 		configFile, path, err := findConfig(fileList, cwd)
 		os.Chdir(path)
-		fmt.Println("chdir to: ", path)
 		outputFolder := flag.String("output", "encrypted/", "folder to output encrytped files to")
-		fmt.Println(*outputFolder)
 		flag.Parse()
 		if err != nil {
 			log.Fatal(err)
