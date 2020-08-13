@@ -65,6 +65,14 @@ to quickly create a Cobra application.`,
 		region, _ := cmd.Flags().GetString("region") // can't fail since default is set
 		kmsClient := kms.New(sess, aws.NewConfig().WithRegion(region))
 		cwd, _ := os.Getwd()
+		for x := range args {
+			file, err := os.Open(args[x])
+			defer file.Close()
+			if err != nil {
+				log.Fatal(err)
+			}
+			decryptData(file, kmsClient)
+		}
 		list, _ := cmd.Flags().GetString("fileList")
 		fileList, path, _ := findConfig(list, cwd)
 		os.Chdir(path)
